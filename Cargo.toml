@@ -1,0 +1,25 @@
+[package]
+name = "dec_edge_faas_discovery"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+libp2p = { version = "0.53.0", features = [ "tokio", "cbor", "dns", "kad", "noise", "macros", "request-response", "tcp", "websocket", "yamux"] }
+tokio = { version = "1.33.0", features = ["full"] }
+clap = { version = "4.5.4", features = ["derive"] }
+futures = "0.3.29"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+void = "1.0.2"
+
+actix-web = { version = "4.5.1"}
+actix-multipart = "0.6.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json =  { version = "1"}
+uuid = { version = "1.8.0", features = ["v4"] }
+
+reqwest = { version = "0.12.5" }
+openssl = { version = "0.10", features = ["vendored"] }
+regex = { version = "1.10.5" }
