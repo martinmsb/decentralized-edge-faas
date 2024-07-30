@@ -13,7 +13,7 @@ pub async fn get_function(data: web::Data<AppState>, name: web::Path<String>) ->
     let peer_id = &data.peer_id;
 
     let file_content_result;
-    // Locate all nodes providing the file.
+    // Locate all nodes providing the function.
     let providers = network_client.lock().await.get_providers(name.clone()).await;
     println!("providers: {:?}", providers);
     if providers.is_empty() {
@@ -68,7 +68,6 @@ pub async fn get_function(data: web::Data<AppState>, name: web::Path<String>) ->
 
 }
 
-// https://hoverbear.org/blog/command-execution-in-
 pub async fn post_function(data: web::Data<AppState>, payload: Multipart) -> impl Responder {
     let my_uuid = Uuid::new_v4();
     // add fn- to uuid to create funciton name
@@ -76,7 +75,7 @@ pub async fn post_function(data: web::Data<AppState>, payload: Multipart) -> imp
     let openfaas_client = &data.ofc;
     let network_client = &data.nc;
     
-    // Deploy the function to openfaas.
+    // Deploy the function to openfaas
     let openfaas_deploy_result = openfaas_client.lock().await.deploy_function(&function_name, payload).await;
     match openfaas_deploy_result {
         Ok(_) => (),

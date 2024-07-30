@@ -29,8 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Spawn the network task for it to run in the background.
     spawn(network_event_loop.run());
 
-    // In case a listen address was provided use it, otherwise listen on any
-    // address.
+    // Listen on provided address.
     
     network_client
             .start_listening(opt.p2p_listen_address)
@@ -68,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             Ok(resp) => {
                                 let body = resp.bytes().await.unwrap().to_vec();
                                 if let Err(err) = network_client.lock().await.respond_function(body, channel).await {
-                                    eprintln!("Failed to respond with file: {:?}", err);
+                                    eprintln!("Failed to respond with body: {:?}", err);
                                 }
                             }
                             Err(err) => {

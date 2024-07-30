@@ -28,6 +28,8 @@ use tokio::time::timeout;
 /// - The network event stream, e.g. for incoming requests.
 ///
 /// - The network task driving the network itself.
+/// 
+/// - Peer ID for the node.
 pub(crate) async fn new(
     secret_key_seed: Option<u8>,
 ) -> Result<(NetworkClient, impl Stream<Item = Event>, EventLoop, PeerId), Box<dyn Error>> {

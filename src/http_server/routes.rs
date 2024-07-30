@@ -4,7 +4,6 @@ use crate::http_server::handlers::{get_function, post_function, manual_hello};
 
 pub fn routes(cfg: &mut web::ServiceConfig) {
     cfg
-        .route("/hello", web::get().to(manual_hello))
         .service(
             web::scope("/api/v1")
                     .route("/function", web::post().to(post_function))
