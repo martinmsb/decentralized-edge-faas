@@ -3,21 +3,23 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use libp2p;
 
-use crate::{network::NetworkClient, openfaas::OpenFaasClient};
+use crate::{network::NetworkClient, openfaas::OpenFaasClient, data_structures::RequestsInProgress};
 use crate::http_server::routes::routes;
 
 pub(crate) struct AppState {
     pub(crate) nc: Arc<Mutex<NetworkClient>>,
     pub(crate) ofc: Arc<Mutex<OpenFaasClient>>,
     pub(crate) peer_id: libp2p::PeerId,
+    pub(crate) rp: Arc<Mutex<RequestsInProgress>>,
 }
 impl AppState {
     pub(crate) fn new(
         nc: Arc<Mutex<NetworkClient>>,
         ofc: Arc<Mutex<OpenFaasClient>>,
         peer_id: libp2p::PeerId,
+        rp: Arc<Mutex<RequestsInProgress>>,
     ) -> Self {
-        Self { nc, ofc, peer_id }
+        Self { nc, ofc, peer_id, rp }
     }
 }
 

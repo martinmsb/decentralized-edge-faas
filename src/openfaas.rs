@@ -16,25 +16,27 @@ pub(crate) struct OpenFaasClient {
     docker_username: String
 }
 
-pub(crate) async fn new(host: String, docker_username: String) -> Result<OpenFaasClient, Box<dyn Error>> {
-    let client = Client::new();
-    Ok(
-        OpenFaasClient {
-            http_client: client,
-            host: host,
-            docker_username: docker_username
-        }
-    )
-}
-
 impl OpenFaasClient {
+    pub(crate) fn new(host: String, docker_username: String) -> OpenFaasClient {
+        let client = Client::new();
+        OpenFaasClient {
+                http_client: client,
+                host: host,
+                docker_username: docker_username
+        }
+    }
     
     pub(crate) async fn request_function(
         &mut self,
         function_name: &String,
+        body: Option<Vec<u8>>
     ) -> Result<Response, Box<dyn Error + Send>> {
-        
-        let resp = self.http_client.get(format!("{}/function/{}", self.host, function_name)).send().await;
+        let resp;
+        if body == None {
+            resp = self.http_client.get(format!("{}/function/{}", self.host, function_name)).send().await;
+        } else {
+            resp = self.http_client.post(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
+        }
         match resp {
             Ok(response) => Ok(response),
             Err(e) => Err(Box::new(e)),

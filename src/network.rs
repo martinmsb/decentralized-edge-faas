@@ -1,3 +1,15 @@
+// Copyright 2021 Protocol Labs.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
@@ -141,7 +153,7 @@ impl NetworkClient {
             .expect("Command receiver not to be dropped.");
         
         //receiver.await.expect("Sender not to be dropped.");
-        // Add 5 sec timeout
+        // Add 5 sec timeout to avoid infinite waiting
         match timeout(Duration::from_secs(5), receiver).await {
             Ok(Ok(providers)) => providers,
             Ok(_) => HashSet::new(),
@@ -154,11 +166,13 @@ impl NetworkClient {
         &mut self,
         peer: PeerId,
         function_name: String,
+        body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         self.sender
             .send(Command::RequestFunction {
                 function_name,
+                body,
                 peer,
                 sender,
             })
@@ -278,6 +292,7 @@ impl EventLoop {
                     self.event_sender
                         .send(Event::InboundRequest {
                             request: request.0,
+                            body: request.1,
                             channel,
                         })
                         .await
@@ -402,6 +417,7 @@ impl EventLoop {
             }
             Command::RequestFunction {
                 function_name,
+                body,
                 peer,
                 sender,
             } => {
@@ -409,7 +425,7 @@ impl EventLoop {
                     .swarm
                     .behaviour_mut()
                     .request_response
-                    .send_request(&peer, FunctionRequest(function_name));
+                    .send_request(&peer, FunctionRequest(function_name, body));
                 self.pending_request_function.insert(request_id, sender);
             }
             Command::RespondFunction { function, channel } => {
@@ -450,6 +466,7 @@ enum Command {
     },
     RequestFunction {
         function_name: String,
+        body: Option<Vec<u8>>,
         peer: PeerId,
         sender: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>,
     },
@@ -463,12 +480,13 @@ enum Command {
 pub(crate) enum Event {
     InboundRequest {
         request: String,
+        body: Option<Vec<u8>>,
         channel: ResponseChannel<FunctionResponse>,
     },
 }
 
 // Simple function exchange protocol
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct FunctionRequest(String);
+struct FunctionRequest(String,Option<Vec<u8>>);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FunctionResponse(Vec<u8>);

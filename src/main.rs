@@ -1,7 +1,9 @@
 mod network;
 mod openfaas;
+use openfaas::OpenFaasClient;
 mod http_server;
-
+mod data_structures;
+use data_structures::RequestsInProgress;
 use tokio::task::spawn;
 use tokio::sync::Mutex;
 
@@ -51,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Create a new reqwest client
     let openfaas_host = "http://localhost:8080".to_string();
-    let openfaas_client = Arc::new(Mutex::new(openfaas::new(openfaas_host, opt.docker_username).await?));
+    let openfaas_client = Arc::new(Mutex::new(OpenFaasClient::new(openfaas_host, opt.docker_username)));
     
     spawn({
     let network_client = Arc::clone(&network_client);
@@ -60,13 +62,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             match network_events.next().await {
                 // Reply with the content of the file on incoming requests.
-                Some(network::Event::InboundRequest { request, channel }) => {
+                Some(network::Event::InboundRequest { request, body, channel }) => {
                         // Http request to localhost:8000/functions/name
-                        let resp = openfaas_client.lock().await.request_function(&request).await;
+                        let resp = openfaas_client.lock().await.request_function(&request, body).await;
                         match resp {
                             Ok(resp) => {
-                                let body = resp.bytes().await.unwrap().to_vec();
-                                if let Err(err) = network_client.lock().await.respond_function(body, channel).await {
+                                let resp_body = resp.bytes().await.unwrap().to_vec();
+                                if let Err(err) = network_client.lock().await.respond_function(resp_body, channel).await {
                                     eprintln!("Failed to respond with body: {:?}", err);
                                 }
                             }
@@ -80,15 +82,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     });
-
+    
+    let requests_in_progress = Arc::new(Mutex::new(RequestsInProgress::new()));
     let app_state = http_server::server::AppState::new(
         Arc::clone(&network_client),
         Arc::clone(&openfaas_client),
-                    peer_id.clone()
-                );
+        peer_id.clone(),
+        Arc::clone(&requests_in_progress),
+        );
     
     http_server::server::run_http_server(app_state, opt.http_listen_port).await.expect("HTTP server failed.");
-    
+
     Ok(())
 }
 
