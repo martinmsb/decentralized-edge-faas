@@ -133,13 +133,13 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
                 let mut rp_instance = requests_in_progress_clone.lock().await;
                 match provider_i {
                     Some(p) => {
-                        rp_instance.push_req(&p);
+                        rp_instance.push_req(&p, true);
                         provider = p;
                     }
                     None => {
                         // Get one from struct
                         provider = rp_instance.get_peer(&providers_clone).unwrap();
-                        rp_instance.push_req(&provider);
+                        rp_instance.push_req(&provider, false);
                     }
                 }
             }
@@ -178,7 +178,7 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
             }
             {
                 let mut rp_instance = requests_in_progress_clone.lock().await;
-                rp_instance.pop_req(&provider);
+                rp_instance.pop_req(&provider, true);
             }
             // Lock the Mutex to get access to the vector
             let mut results = shared_result.lock().await;
@@ -193,6 +193,12 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
 
     for handle in handles {
         handle.await.unwrap();
+    }
+
+    // Decrease in progress requests from providers in this multicall
+    {
+        let mut rp_instance = requests_in_progress.lock().await;
+        rp_instance.remove_multicall(&providers);
     }
 
     let results = items_result.lock().await;
@@ -287,12 +293,12 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
             async move { 
                 {
                     let mut rp_instance = requests_in_progress_clone.lock().await;
-                    rp_instance.push_req(&p);
+                    rp_instance.push_req(&p, false);
                 }
                 let response = network_client.lock().await.request_function(p, name, body).await;
                 {
                     let mut rp_instance = requests_in_progress_clone.lock().await;
-                    rp_instance.pop_req(&p);
+                    rp_instance.pop_req(&p, false);
                 }
                 response
              }.boxed()
