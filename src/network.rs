@@ -166,12 +166,14 @@ impl NetworkClient {
         &mut self,
         peer: PeerId,
         function_name: String,
+        method: String,
         body: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, Box<dyn Error + Send>> {
+    ) -> Result<FunctionResponse, Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         self.sender
             .send(Command::RequestFunction {
                 function_name,
+                method,
                 body,
                 peer,
                 sender,
@@ -184,11 +186,12 @@ impl NetworkClient {
     /// Respond with the provided function content to the given request.
     pub(crate) async fn respond_function(
         &mut self,
-        function: Vec<u8>,
+        function_response_status: u16,
+        function_response_body: Vec<u8>,
         channel: ResponseChannel<FunctionResponse>,
     ) -> Result<(), Box<dyn Error + Send>> {
         self.sender
-            .send(Command::RespondFunction { function, channel })
+            .send(Command::RespondFunction { function_response_status, function_response_body, channel })
             .await
             .map_err(|e| Box::new(e) as Box<dyn Error + Send>)
     }
@@ -202,7 +205,7 @@ pub(crate) struct EventLoop {
     pending_start_providing: HashMap<kad::QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<kad::QueryId, oneshot::Sender<HashSet<PeerId>>>,
     pending_request_function:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>>,
+        HashMap<OutboundRequestId, oneshot::Sender<Result<FunctionResponse, Box<dyn Error + Send>>>>,
 }
 
 impl EventLoop {
@@ -292,7 +295,8 @@ impl EventLoop {
                     self.event_sender
                         .send(Event::InboundRequest {
                             request: request.0,
-                            body: request.1,
+                            method: request.1,
+                            body: request.2,
                             channel,
                         })
                         .await
@@ -306,7 +310,7 @@ impl EventLoop {
                         .pending_request_function
                         .remove(&request_id)
                         .expect("Request to still be pending.")
-                        .send(Ok(response.0));
+                        .send(Ok(response));
                 }
             },
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
@@ -417,6 +421,7 @@ impl EventLoop {
             }
             Command::RequestFunction {
                 function_name,
+                method,
                 body,
                 peer,
                 sender,
@@ -425,14 +430,14 @@ impl EventLoop {
                     .swarm
                     .behaviour_mut()
                     .request_response
-                    .send_request(&peer, FunctionRequest(function_name, body));
+                    .send_request(&peer, FunctionRequest(function_name, method, body));
                 self.pending_request_function.insert(request_id, sender);
             }
-            Command::RespondFunction { function, channel } => {
+            Command::RespondFunction { function_response_status, function_response_body, channel } => {
                 self.swarm
                     .behaviour_mut()
                     .request_response
-                    .send_response(channel, FunctionResponse(function))
+                    .send_response(channel, FunctionResponse(function_response_status, function_response_body))
                     .expect("Connection to peer to be still open.");
             }
         }
@@ -466,12 +471,14 @@ enum Command {
     },
     RequestFunction {
         function_name: String,
+        method: String,
         body: Option<Vec<u8>>,
         peer: PeerId,
-        sender: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>,
+        sender: oneshot::Sender<Result<FunctionResponse, Box<dyn Error + Send>>>,
     },
     RespondFunction {
-        function: Vec<u8>,
+        function_response_status: u16,
+        function_response_body: Vec<u8>,
         channel: ResponseChannel<FunctionResponse>,
     },
 }
@@ -480,6 +487,7 @@ enum Command {
 pub(crate) enum Event {
     InboundRequest {
         request: String,
+        method: String,
         body: Option<Vec<u8>>,
         channel: ResponseChannel<FunctionResponse>,
     },
@@ -487,6 +495,6 @@ pub(crate) enum Event {
 
 // Simple function exchange protocol
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct FunctionRequest(String,Option<Vec<u8>>);
+struct FunctionRequest(String,String,Option<Vec<u8>>);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FunctionResponse(Vec<u8>);
+pub(crate) struct FunctionResponse(pub u16, pub Vec<u8>);

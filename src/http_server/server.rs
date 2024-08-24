@@ -33,5 +33,5 @@ pub async fn run_http_server(app_state: AppState, port: u16) -> std::io::Result<
             .configure(routes)
     });
 
-    server.bind(("127.0.0.1", port))?.run().await
+    server.bind(("0.0.0.0", port))?.run().await
 }

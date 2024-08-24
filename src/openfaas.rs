@@ -29,13 +29,29 @@ impl OpenFaasClient {
     pub(crate) async fn request_function(
         &mut self,
         function_name: &String,
+        method: &String,
         body: Option<Vec<u8>>
     ) -> Result<Response, Box<dyn Error + Send>> {
         let resp;
-        if body == None {
-            resp = self.http_client.get(format!("{}/function/{}", self.host, function_name)).send().await;
-        } else {
-            resp = self.http_client.post(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
+        match method.as_str() {
+            "GET" => {
+                resp = self.http_client.get(format!("{}/function/{}", self.host, function_name)).send().await;
+            },
+            "POST" => {
+                resp = self.http_client.post(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
+            },
+            "PUT" => {
+                resp = self.http_client.put(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
+            },
+            "DELETE" => {
+                resp = self.http_client.delete(format!("{}/function/{}", self.host, function_name)).send().await;
+            },
+            "PATCH" => {
+                resp = self.http_client.patch(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
+            },
+            _ => {
+                return Err(Box::new(io::Error::new(io::ErrorKind::InvalidInput, "Not supported method")));
+            }
         }
         match resp {
             Ok(response) => Ok(response),
@@ -116,7 +132,15 @@ impl OpenFaasClient {
         // Deploy the function to openfaas
         let output_result = Command::new("faas-cli").args(["up", "-f", "openfaas_config.yml"]).output();
         match output_result {
-            Ok(output) => output,
+            Ok(output) => {
+                if output.status.success() {
+                    println!("Function deployed successfully");
+                } else {
+                    eprintln!("Failed to deploy function: {:?}", output);
+                    self.remove_files().unwrap();
+                    return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to deploy function. Check handler and requirements files")));
+                }
+            },
             Err(e) => {
                 eprintln!("Failed to execute command: {:?}", e);
                 return Err(Box::new(e));

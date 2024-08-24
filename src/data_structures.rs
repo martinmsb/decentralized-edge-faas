@@ -86,7 +86,9 @@ impl RequestsInProgress {
                 self.map.remove(item);
                 println!("Removed: {:?} from pos: {:?}", item, pos);
             }
-
+            while self.queues_vector.len() > 2 && self.queues_vector.last().map_or(false, |deque| deque.is_empty()) {
+                self.queues_vector.pop();
+            }
             println!("Actual state");
             println!("{:?}", self);
             true

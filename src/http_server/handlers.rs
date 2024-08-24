@@ -1,5 +1,7 @@
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Responder};
 use actix_multipart::Multipart;
+use reqwest::Method;
 use futures::FutureExt;
 use libp2p::PeerId;
 use tokio::sync::Mutex;
@@ -7,8 +9,9 @@ use tokio::task::spawn;
 
 use std::sync::Arc;
 use std::collections::HashSet;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::data_structures::RequestsInProgress;
@@ -19,13 +22,18 @@ use crate::openfaas::OpenFaasClient;
 #[derive(Deserialize)]
 pub struct AnycallBody {
     http_method: String,
-    body: Option<Vec<u8>>
+    body: Option<Value>
 }
 
 #[derive(Deserialize)]
 pub struct MulticallBody {
     // Array of objects
     items: Value
+}
+
+pub struct OpenFaaSResponse {
+    status: u16,
+    body: Vec<u8>
 }
 
 pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>, req_body: web::Json<AnycallBody>) -> impl Responder {
@@ -39,12 +47,18 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
     let requests_in_progress = &data.rp;
     let peer_id = &data.peer_id;
 
-    let action = &req_body.http_method;
-    if action != "GET" && action != "POST" {
-        return Err(actix_web::error::ErrorBadRequest("Invalid HTTP method"));
-    }
+    let method = &req_body.http_method;
+    
+    match Method::from_bytes(method.as_bytes()) {
+        Ok(_) => (),
+        Err(_) => return Err(actix_web::error::ErrorBadRequest("Invalid HTTP method"))
+    };
 
-    let body = &req_body.body;
+    let body_field = &req_body.body;
+    let body = match body_field {
+        Some(b) => Some(b.to_string().into_bytes()),
+        None => None
+    };
 
     let function_response_result;
     // Locate all nodes providing the function.
@@ -58,21 +72,21 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
     println!("providers: {:?}", providers);
     // Check if providers length is 1 and then check if it is the same as the peer_id
     // If it is, then return the file content
-    match function_request(providers, peer_id, &name, body, requests_in_progress, openfaas_client, network_client).await
+    match function_request(providers, peer_id, &name, &method, &body, requests_in_progress, openfaas_client, network_client).await
     {
         Ok(resp) => function_response_result = resp,
         Err(e) => return Err(e)
     }
     
-    let s = match String::from_utf8(function_response_result) {
+    let s = match String::from_utf8(function_response_result.body) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Invalid UTF-8 sequence: {:?}", e);
             return Err(actix_web::error::ErrorInternalServerError("Invalid UTF-8 sequence"))
         }
     };
-
-    Ok(HttpResponse::Ok().body(s))
+    
+    Ok(HttpResponse::build(StatusCode::from_u16(function_response_result.status).unwrap()).body(s))
 
 }
 
@@ -104,7 +118,7 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
     };
 
     
-    let items_result = Arc::new(Mutex::new(Vec::with_capacity(items.capacity())));
+    let items_result: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(vec![serde_json::Value::String("".to_string()); items.len()]));
 
     let mut providers_iter = providers.iter();
     let mut actual_item = 0;
@@ -119,6 +133,7 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
         let requests_in_progress_clone = Arc::clone(requests_in_progress);
         let providers_clone: HashSet<PeerId> = providers.clone();
         let name_clone = name.clone();
+        let method = "POST".to_string();
         let shared_result         = Arc::clone(&items_result);
 
         let provider_i = match providers_iter.next() {
@@ -143,20 +158,23 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
                     }
                 }
             }
-            let body = item.as_str().unwrap().to_string().into_bytes();
+            let body = item.to_string().into_bytes();
+            let function_response_status;
             let function_response_result;
             if providers_clone.contains(&peer_id_clone) {
                 let resp;
                 {
-                    resp = openfaas_client_clone.lock().await.request_function(&name_clone, Some(body)).await;
+                    resp = openfaas_client_clone.lock().await.request_function(&name_clone, &method, Some(body)).await;
                 }
                 match resp {
                     Ok(resp) => {
+                        function_response_status = resp.status().as_u16();
                         let resp_body = resp.bytes().await.unwrap().to_vec();
                         function_response_result = resp_body;
                     }
                     Err(err) => {
                         eprintln!("Failed to get response from function {}: {:?}", name_clone, err);
+                        function_response_status = 500;
                         function_response_result = "Failed to get response from function".to_string().into_bytes();
                     }
                 }
@@ -165,14 +183,18 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
                 let body = body.clone();
                 let function_response;
                 {
-                    function_response = network_client_clone.lock().await.request_function(provider, name_clone, Some(body)).await;
+                    function_response = network_client_clone.lock().await.request_function(provider, name_clone, method, Some(body)).await;
                 }
                 
-                function_response_result = match function_response {
-                    Ok(function_response) => function_response,
+                match function_response {
+                    Ok(function_response) => {
+                        function_response_status = function_response.0;
+                        function_response_result = function_response.1
+                    },
                     Err(e) => {
-                        eprintln!("None of the providers returned file: {:?}", e);
-                        "None of the providers returned file".to_string().into_bytes()
+                        eprintln!("Response from provider failed: {:?}", e);
+                        function_response_status = 500;
+                        function_response_result = "Response from provider failed".to_string().into_bytes()
                     }
                 };
             }
@@ -180,11 +202,20 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
                 let mut rp_instance = requests_in_progress_clone.lock().await;
                 rp_instance.pop_req(&provider, true);
             }
+
+            let parsed_body = detect_and_parse_body(function_response_result);
             // Lock the Mutex to get access to the vector
             let mut results = shared_result.lock().await;
 
             // Write to the shared vector
-            results[actual_item] = function_response_result;
+            if function_response_status != 200 {
+                results[actual_item] = json!({
+                    "status": function_response_status,
+                    "body": serialize_body(parsed_body)
+                });
+            } else {
+                results[actual_item] = serialize_body(parsed_body);
+            }
         });
         // Collect task handles to await them later
         handles.push(handle_call);
@@ -269,18 +300,21 @@ async fn anounce_provider(network_client: &Arc<Mutex<NetworkClient>>, function_n
     network_client.lock().await.start_providing(function_name.clone()).await;
 }
 
-async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &String, body: &Option<Vec<u8>>, requests_in_progress: &Arc<Mutex<RequestsInProgress>>, openfaas_client: &Arc<Mutex<OpenFaasClient>>, network_client: &Arc<Mutex<NetworkClient>>) -> Result<Vec<u8>, actix_web::Error> {
-    let function_response_result;
+async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &String, method: &String, body: &Option<Vec<u8>>, requests_in_progress: &Arc<Mutex<RequestsInProgress>>, openfaas_client: &Arc<Mutex<OpenFaasClient>>, network_client: &Arc<Mutex<NetworkClient>>) -> Result<OpenFaaSResponse, actix_web::Error> {
+    let function_response_status;
+    let function_response_body;
+    
     if providers.contains(peer_id) {
-        let resp = openfaas_client.lock().await.request_function(&name, body.clone()).await;
+        let resp = openfaas_client.lock().await.request_function(&name, &method, body.clone()).await;
         match resp {
             Ok(resp) => {
+                function_response_status = resp.status().as_u16();
                 let resp_body = resp.bytes().await.unwrap().to_vec();
-                function_response_result = resp_body;
+                function_response_body = resp_body;
             }
             Err(err) => {
                 eprintln!("Failed to get response from function {}: {:?}", name, err);
-                return Err(actix_web::error::ErrorInternalServerError("Failed to read the file"));
+                return Err(actix_web::error::ErrorInternalServerError("Failed to get response from function"));
             }
         }
     }
@@ -288,6 +322,7 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
         let requests = providers.into_iter().map(|p| {
             let network_client = network_client.clone();
             let name = name.clone();
+            let method = method.clone();
             let body = body.clone();
             let requests_in_progress_clone = Arc::clone(requests_in_progress);
             async move { 
@@ -295,7 +330,7 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
                     let mut rp_instance = requests_in_progress_clone.lock().await;
                     rp_instance.push_req(&p, false);
                 }
-                let response = network_client.lock().await.request_function(p, name, body).await;
+                let response = network_client.lock().await.request_function(p, name, method, body).await;
                 {
                     let mut rp_instance = requests_in_progress_clone.lock().await;
                     rp_instance.pop_req(&p, false);
@@ -308,13 +343,74 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
         let function_response = futures::future::select_ok(requests)
             .await;
         
-        function_response_result = match function_response {
-            Ok(function_response) => function_response.0,
+        match function_response {
+            Ok(function_response) => {
+                function_response_body = function_response.0.1;
+                function_response_status = function_response.0.0;
+            },
             Err(e) => {
                 eprintln!("None of the providers returned file: {:?}", e);
                 return Err(actix_web::error::ErrorInternalServerError("None of the providers returned file"));
             }
         };
     }
-    Ok(function_response_result)
+    let openfaas_response = OpenFaaSResponse {
+        status: function_response_status,
+        body: function_response_body
+    };
+    Ok(openfaas_response)
+}
+
+#[derive(Clone, Serialize)]
+enum BodyData {
+    Integer(i32),
+    Float(f64),
+    String(String),
+    Boolean(bool),
+    Json(Value),
+}
+
+fn detect_and_parse_body(body: Vec<u8>) -> BodyData {
+    // Convert Vec<u8> to String
+    let string_body = match String::from_utf8(body.clone()) {
+        Ok(s) => s,
+        Err(_) => return BodyData::String("Invalid UTF-8 data".to_string()),
+    };
+
+    // Try to parse as JSON
+    if let Ok(json_value) = serde_json::from_str::<Value>(&string_body) {
+        return BodyData::Json(json_value);
+    }
+
+    // Try to parse as integer
+    if let Ok(int_value) = string_body.parse::<i32>() {
+        return BodyData::Integer(int_value);
+    }
+
+    // Try to parse as float
+    if let Ok(float_value) = string_body.parse::<f64>() {
+        return BodyData::Float(float_value);
+    }
+
+    // Try to parse as boolean
+    if let Ok(bool_value) = string_body.parse::<bool>() {
+        return BodyData::Boolean(bool_value);
+    }
+
+    // Default to string if not an integer, float, boolean, or JSON
+    BodyData::String(string_body)
+}
+
+fn serialize_body(body: BodyData) -> serde_json::Value {
+    let serialized_data: serde_json::Value = 
+        match body {
+            BodyData::Integer(val) => json!(val),
+            BodyData::Float(val) => json!(val),
+            BodyData::String(val) => json!(val),
+            BodyData::Boolean(val) => json!(val),
+            BodyData::Json(val) => val,
+        };
+
+    json!(serialized_data)
+    
 }
