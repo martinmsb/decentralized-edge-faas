@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let opt = Opt::parse();
     
-    let (mut network_client, mut network_events, network_event_loop, peer_id) =
+    let (network_client, mut network_events, network_event_loop, peer_id) =
         network::new(opt.secret_key_seed).await?;
     println!("Peer ID: {:?}", peer_id.to_base58());
 
@@ -49,11 +49,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial fail.");
     }
     // Arc allows for multiple ownership and the Mutex ensures safe concurrent access
-    let network_client = Arc::new(Mutex::new(network_client));
+    let network_client = Arc::new(network_client);
     
     // Create a new reqwest client
     let openfaas_host = "http://localhost:8080".to_string();
-    let openfaas_client = Arc::new(Mutex::new(OpenFaasClient::new(openfaas_host, opt.docker_username)));
+    let openfaas_client = Arc::new(OpenFaasClient::new(openfaas_host, opt.docker_username));
     
     spawn({
     let network_client = Arc::clone(&network_client);
@@ -63,20 +63,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
             match network_events.next().await {
                 // Reply with the content of the file on incoming requests.
                 Some(network::Event::InboundRequest { request, method, body, channel }) => {
+                    spawn({
+                        let network_client = Arc::clone(&network_client);
+                        let openfaas_client = Arc::clone(&openfaas_client);
+                        async move {
                         // Http request to localhost:8000/functions/name
-                        let resp = openfaas_client.lock().await.request_function(&request, &method, body).await;
+                        let resp = openfaas_client.request_function(&request, &method, body).await;
+                        println!("Response received in main loop");
+                        let resp_status;
+                        let resp_body;
                         match resp {
                             Ok(resp) => {
-                                let resp_status = resp.status().as_u16();
-                                let resp_body = resp.bytes().await.unwrap().to_vec();
-                                if let Err(err) = network_client.lock().await.respond_function(resp_status, resp_body, channel).await {
-                                    eprintln!("Failed to respond with body: {:?}", err);
-                                }
+                                resp_status = resp.status().as_u16();
+                                resp_body = resp.bytes().await.unwrap().to_vec();
                             }
                             Err(err) => {
                                 eprintln!("Failed to send request: {:?}", err);
+                                resp_status = 500;
+                                resp_body = "Failed to send request".as_bytes().to_vec(); 
                             }
                         }
+                        if let Err(err) = network_client.respond_function(resp_status, resp_body, channel).await {
+                            eprintln!("Failed to respond with request result: {:?}", err);
+                        }
+                    }
+                    });
                 }
                 e => todo!("{:?}", e),
             }

@@ -31,7 +31,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use tokio::time::timeout;
-
+use tokio::sync::Mutex;
+use std::sync::Arc;
 /// Creates the network components, namely:
 ///
 /// - The network client to interact with the network layer from anywhere
@@ -89,7 +90,7 @@ pub(crate) async fn new(
 
     Ok((
         NetworkClient {
-            sender: command_sender,
+            sender: Arc::new(Mutex::new(command_sender)),
         },
         event_receiver,
         EventLoop::new(swarm, command_receiver, event_sender),
@@ -99,59 +100,75 @@ pub(crate) async fn new(
 
 #[derive(Clone)]
 pub(crate) struct NetworkClient {
-    sender: mpsc::Sender<Command>,
+    sender: Arc<Mutex<mpsc::Sender<Command>>>,
 }
 
 impl NetworkClient {
     /// Listen for incoming connections on the given address.
     pub(crate) async fn start_listening(
-        &mut self,
+        &self,
         addr: Multiaddr,
     ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::StartListening { addr, sender })
+        let sender_clone = Arc::clone(&self.sender);
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        locked_sender.send(Command::StartListening { addr, sender })
             .await
             .expect("Command receiver not to be dropped.");
+        }
         receiver.await.expect("Sender not to be dropped.")
     }
 
     /// Dial the given peer at the given address.
     pub(crate) async fn dial(
-        &mut self,
+        &self,
         peer_id: PeerId,
         peer_addr: Multiaddr,
     ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::Dial {
+        let sender_clone = Arc::clone(&self.sender);
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        locked_sender.send(Command::Dial {
                 peer_id,
                 peer_addr,
                 sender,
             })
             .await
             .expect("Command receiver not to be dropped.");
+        }
         receiver.await.expect("Sender not to be dropped.")
     }
 
     /// Advertise the local node as the provider of the given function on the DHT.
-    pub(crate) async fn start_providing(&mut self, function_name: String) {
+    pub(crate) async fn start_providing(&self, function_name: String) {
+        let providers = self.get_providers(function_name.clone()).await;
+        println!("Providers before start providing: {:?}", providers);
         let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::StartProviding { function_name, sender })
+        let sender_clone = Arc::clone(&self.sender);
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        locked_sender
+            .send(Command::StartProviding { function_name: function_name.clone(), sender })
             .await
             .expect("Command receiver not to be dropped.");
+        }
         receiver.await.expect("Sender not to be dropped.");
+        let providers = self.get_providers(function_name.clone()).await;
+        println!("Providers after start providing: {:?}", providers);
     }
 
     /// Find the providers for the given function on the DHT.
-    pub(crate) async fn get_providers(&mut self, function_name: String) -> HashSet<PeerId> {
+    pub(crate) async fn get_providers(&self, function_name: String) -> HashSet<PeerId> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::GetProviders { function_name, sender })
+        let sender_clone = Arc::clone(&self.sender);
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        locked_sender.send(Command::GetProviders { function_name, sender })
             .await
             .expect("Command receiver not to be dropped.");
-        
+        }
         //receiver.await.expect("Sender not to be dropped.");
         // Add 5 sec timeout to avoid infinite waiting
         match timeout(Duration::from_secs(5), receiver).await {
@@ -163,15 +180,18 @@ impl NetworkClient {
 
     /// Request the content of the given function from the given peer.
     pub(crate) async fn request_function(
-        &mut self,
+        &self,
         peer: PeerId,
         function_name: String,
         method: String,
         body: Option<Vec<u8>>,
     ) -> Result<FunctionResponse, Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::RequestFunction {
+        let sender_clone = Arc::clone(&self.sender);
+        println!("Sending request function command");
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        locked_sender.send(Command::RequestFunction {
                 function_name,
                 method,
                 body,
@@ -180,32 +200,50 @@ impl NetworkClient {
             })
             .await
             .expect("Command receiver not to be dropped.");
-        receiver.await.expect("Sender not be dropped.")
+        }
+        println!("Waiting for response");
+        
+        let res = receiver.await.expect("Sender not be dropped.");
+        println!("Response received");
+        println!("Response: {:?}", res);
+        res
     }
 
     /// Respond with the provided function content to the given request.
     pub(crate) async fn respond_function(
-        &mut self,
+        &self,
         function_response_status: u16,
         function_response_body: Vec<u8>,
         channel: ResponseChannel<FunctionResponse>,
     ) -> Result<(), Box<dyn Error + Send>> {
-        self.sender
+        let sender_clone = Arc::clone(&self.sender);
+        {
+        let mut locked_sender = sender_clone.lock().await;
+        println!("Sender locked. Sending response");
+        println!("Response status: {:?}", function_response_status);
+        println!("Response body: {:?}", function_response_body);
+
+        let r = locked_sender
             .send(Command::RespondFunction { function_response_status, function_response_body, channel })
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send>)
+            .await;
+        match r {
+            Ok(_) => println!("Response sent"),
+            Err(e) => println!("Error sending response: {:?}", e),
+        }
+        }
+        println!("Response sent");
+        Ok(())
     }
 }
 
 pub(crate) struct EventLoop {
     swarm: Swarm<Behaviour>,
     command_receiver: mpsc::Receiver<Command>,
-    event_sender: mpsc::Sender<Event>,
-    pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>,
-    pending_start_providing: HashMap<kad::QueryId, oneshot::Sender<()>>,
-    pending_get_providers: HashMap<kad::QueryId, oneshot::Sender<HashSet<PeerId>>>,
-    pending_request_function:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<FunctionResponse, Box<dyn Error + Send>>>>,
+    event_sender: Arc<Mutex<mpsc::Sender<Event>>>,
+    pending_dial: Arc<Mutex<HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>>>,
+    pending_start_providing: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<()>>>>,
+    pending_get_providers: Arc<Mutex<HashMap<kad::QueryId, oneshot::Sender<HashSet<PeerId>>>>>,
+    pending_request_function: Arc<Mutex<HashMap<OutboundRequestId, oneshot::Sender<Result<FunctionResponse, Box<dyn Error + Send>>>>>>,
 }
 
 impl EventLoop {
@@ -215,13 +253,13 @@ impl EventLoop {
         event_sender: mpsc::Sender<Event>,
     ) -> Self {
         Self {
-            swarm,
-            command_receiver,
-            event_sender,
-            pending_dial: Default::default(),
-            pending_start_providing: Default::default(),
-            pending_get_providers: Default::default(),
-            pending_request_function: Default::default(),
+            swarm: swarm,
+            command_receiver: command_receiver,
+            event_sender: Arc::new(Mutex::new(event_sender)),
+            pending_dial: Arc::new(Mutex::new(Default::default())),
+            pending_start_providing: Arc::new(Mutex::new(Default::default())),
+            pending_get_providers: Arc::new(Mutex::new(Default::default())),
+            pending_request_function: Arc::new(Mutex::new(Default::default())),
         }
     }
 
@@ -230,15 +268,22 @@ impl EventLoop {
             tokio::select! {
                 event = self.swarm.select_next_some() => self.handle_event(event).await,
                 command = self.command_receiver.next() => match command {
-                    Some(c) => self.handle_command(c).await,
-                    // Command channel closed, thus shutting down the network event loop.
-                    None=>  return,
+                    Some(c) => {
+                        println!("Received command: {:?}", c);
+                        self.handle_command(c).await;
+                    },
+                    None => return, // Command channel closed, shutting down
                 },
             }
         }
     }
 
     async fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent>) {
+        let mut event_sender = self.event_sender.lock().await;
+        let mut pending_dial = self.pending_dial.lock().await;
+        let mut pending_start_providing = self.pending_start_providing.lock().await;
+        let mut pending_get_providers = self.pending_get_providers.lock().await;
+        let mut pending_request_function = self.pending_request_function.lock().await;
         match event {
             SwarmEvent::Behaviour(BehaviourEvent::Kademlia(
                 kad::Event::OutboundQueryProgressed {
@@ -247,8 +292,7 @@ impl EventLoop {
                     ..
                 },
             )) => {
-                let sender: oneshot::Sender<()> = self
-                    .pending_start_providing
+                let sender: oneshot::Sender<()> = pending_start_providing
                     .remove(&id)
                     .expect("Completed query to be previously pending.");
                 let _ = sender.send(());
@@ -264,7 +308,7 @@ impl EventLoop {
                     ..
                 },
             )) => {
-                if let Some(sender) = self.pending_get_providers.remove(&id) {
+                if let Some(sender) = pending_get_providers.remove(&id) {
                     sender.send(providers).expect("Receiver not to be dropped");
 
                     // Finish the query. We are only interested in the first result.
@@ -292,7 +336,8 @@ impl EventLoop {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    self.event_sender
+                    println!("Sending inbound request event: {:?}", request);
+                    event_sender
                         .send(Event::InboundRequest {
                             request: request.0,
                             method: request.1,
@@ -306,8 +351,7 @@ impl EventLoop {
                     request_id,
                     response,
                 } => {
-                    let _ = self
-                        .pending_request_function
+                    let _ = pending_request_function
                         .remove(&request_id)
                         .expect("Request to still be pending.")
                         .send(Ok(response));
@@ -318,8 +362,7 @@ impl EventLoop {
                     request_id, error, ..
                 },
             )) => {
-                let _ = self
-                    .pending_request_function
+                let _ = pending_request_function
                     .remove(&request_id)
                     .expect("Request to still be pending.")
                     .send(Err(Box::new(error)));
@@ -343,7 +386,7 @@ impl EventLoop {
             } => {
                 println!("Connected to peer: {:?}", peer_id.to_base58());
                 if endpoint.is_dialer() {
-                    if let Some(sender) = self.pending_dial.remove(&peer_id) {
+                    if let Some(sender) = pending_dial.remove(&peer_id) {
                         let _ = sender.send(Ok(()));
                     }
                 }
@@ -358,7 +401,7 @@ impl EventLoop {
             SwarmEvent::ConnectionClosed { .. } => {}
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 if let Some(peer_id) = peer_id {
-                    if let Some(sender) = self.pending_dial.remove(&peer_id) {
+                    if let Some(sender) = pending_dial.remove(&peer_id) {
                         let _ = sender.send(Err(Box::new(error)));
                     }
                 }
@@ -368,11 +411,15 @@ impl EventLoop {
                 peer_id: Some(peer_id),
                 ..
             } => eprintln!("Dialing {peer_id}"),
-            e => panic!("{e:?}"),
+            e => eprintln!("Not handled event: {e:?}"),
         }
     }
 
     async fn handle_command(&mut self, command: Command) {
+        let mut pending_dial = self.pending_dial.lock().await;
+        let mut pending_start_providing = self.pending_start_providing.lock().await;
+        let mut pending_get_providers = self.pending_get_providers.lock().await;
+        let mut pending_request_function = self.pending_request_function.lock().await;
         match command {
             Command::StartListening { addr, sender } => {
                 let _ = match self.swarm.listen_on(addr) {
@@ -385,7 +432,7 @@ impl EventLoop {
                 peer_addr,
                 sender,
             } => {
-                if let hash_map::Entry::Vacant(e) = self.pending_dial.entry(peer_id) {
+                if let hash_map::Entry::Vacant(e) = pending_dial.entry(peer_id) {
                     self.swarm
                         .behaviour_mut()
                         .kademlia
@@ -409,15 +456,14 @@ impl EventLoop {
                     .kademlia
                     .start_providing(function_name.into_bytes().into())
                     .expect("No store error.");
-                self.pending_start_providing.insert(query_id, sender);
+                pending_start_providing.insert(query_id, sender);
             }
             Command::GetProviders { function_name, sender } => {
-                let query_id = self
-                    .swarm
+                let query_id = self.swarm
                     .behaviour_mut()
                     .kademlia
                     .get_providers(function_name.into_bytes().into());
-                self.pending_get_providers.insert(query_id, sender);
+                pending_get_providers.insert(query_id, sender);
             }
             Command::RequestFunction {
                 function_name,
@@ -431,9 +477,11 @@ impl EventLoop {
                     .behaviour_mut()
                     .request_response
                     .send_request(&peer, FunctionRequest(function_name, method, body));
-                self.pending_request_function.insert(request_id, sender);
+                pending_request_function.insert(request_id, sender);
+                println!("Request {:?} stored", request_id);
             }
             Command::RespondFunction { function_response_status, function_response_body, channel } => {
+                println!("Command RespondFunction");
                 self.swarm
                     .behaviour_mut()
                     .request_response

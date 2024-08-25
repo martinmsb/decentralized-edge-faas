@@ -27,7 +27,7 @@ impl OpenFaasClient {
     }
     
     pub(crate) async fn request_function(
-        &mut self,
+        &self,
         function_name: &String,
         method: &String,
         body: Option<Vec<u8>>
@@ -59,7 +59,7 @@ impl OpenFaasClient {
         }
     }
     pub(crate) async fn deploy_function(
-        &mut self,
+        &self,
         function_name: &str,
         mut files: Multipart
     ) -> Result<(), Box<dyn Error>>{
@@ -153,7 +153,7 @@ impl OpenFaasClient {
     }
 
     fn create_config_file(
-        &mut self,
+        &self,
         template_path: &Path,
         output_path: &Path,
         values: &[&str]) -> std::io::Result<()> {
@@ -194,7 +194,7 @@ impl OpenFaasClient {
     }
 
     fn remove_files(
-        &mut self) -> std::io::Result<()> {
+        &self) -> std::io::Result<()> {
         let dir = fs::read_dir("openfaas_handler").unwrap();
         for entry in dir {
             let entry = entry.unwrap();

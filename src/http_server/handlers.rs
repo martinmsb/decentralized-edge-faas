@@ -62,7 +62,7 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
 
     let function_response_result;
     // Locate all nodes providing the function.
-    let providers = network_client.lock().await.get_providers(name.clone()).await;
+    let providers = network_client.get_providers(name.clone()).await;
     println!("providers: {:?}", providers);
     if providers.is_empty() {
         return Err(actix_web::error::ErrorInternalServerError("Could not find provider"));
@@ -102,7 +102,7 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
     let requests_in_progress = &data.rp;
 
     // TODO uncomment
-    let providers = network_client.lock().await.get_providers(name.clone()).await;
+    let providers = network_client.get_providers(name.clone()).await;
     println!("providers: {:?}", providers);
 
     if providers.is_empty() {
@@ -127,7 +127,7 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
     
     for item in items_clone {
         // TODO remove clone here as used in other scope
-        let network_client_clone = Arc::clone(network_client);
+        let network_client_clone = network_client.clone();
         let openfaas_client_clone = Arc::clone(openfaas_client);
         let peer_id_clone = peer_id.clone();
         let requests_in_progress_clone = Arc::clone(requests_in_progress);
@@ -161,11 +161,11 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
             let body = item.to_string().into_bytes();
             let function_response_status;
             let function_response_result;
-            if providers_clone.contains(&peer_id_clone) {
+            if provider == peer_id_clone {
                 let resp;
-                {
-                    resp = openfaas_client_clone.lock().await.request_function(&name_clone, &method, Some(body)).await;
-                }
+                
+                resp = openfaas_client_clone.request_function(&name_clone, &method, Some(body)).await;
+                
                 match resp {
                     Ok(resp) => {
                         function_response_status = resp.status().as_u16();
@@ -182,9 +182,8 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
             else {
                 let body = body.clone();
                 let function_response;
-                {
-                    function_response = network_client_clone.lock().await.request_function(provider, name_clone, method, Some(body)).await;
-                }
+
+                function_response = network_client_clone.request_function(provider, name_clone, method, Some(body)).await;
                 
                 match function_response {
                     Ok(function_response) => {
@@ -247,7 +246,7 @@ pub async fn deploy_function(data: web::Data<AppState>, payload: Multipart) -> i
     let network_client = &data.nc;
     
     // Deploy the function to openfaas
-    let openfaas_deploy_result = openfaas_client.lock().await.deploy_function(&function_name, payload).await;
+    let openfaas_deploy_result = openfaas_client.deploy_function(&function_name, payload).await;
     match openfaas_deploy_result {
         Ok(_) => (),
         Err(e) => {
@@ -257,7 +256,7 @@ pub async fn deploy_function(data: web::Data<AppState>, payload: Multipart) -> i
     }
 
     // Start providing the function name to the network.    
-    network_client.lock().await.start_providing(function_name.clone()).await;
+    network_client.start_providing(function_name.clone()).await;
     
     Ok(HttpResponse::Ok().body(function_name))
 }
@@ -278,6 +277,7 @@ pub async fn deploy_known_function(data: web::Data<AppState>, payload: Multipart
             return Err(e)
         }
     }
+    
 
     // Start providing the function name to the network.    
     anounce_provider(network_client, &function_name).await;
@@ -285,8 +285,8 @@ pub async fn deploy_known_function(data: web::Data<AppState>, payload: Multipart
     Ok(HttpResponse::Ok().body(function_name))
 }
 
-async fn deploy_openfaas(openfaas_client: &Arc<Mutex<OpenFaasClient>>, function_name: &String, payload: Multipart) -> Result<(), actix_web::Error> {
-    let openfaas_deploy_result = openfaas_client.lock().await.deploy_function(&function_name, payload).await;
+async fn deploy_openfaas(openfaas_client: &Arc<OpenFaasClient>, function_name: &String, payload: Multipart) -> Result<(), actix_web::Error> {
+    let openfaas_deploy_result = openfaas_client.deploy_function(&function_name, payload).await;
     match openfaas_deploy_result {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -296,16 +296,16 @@ async fn deploy_openfaas(openfaas_client: &Arc<Mutex<OpenFaasClient>>, function_
     }
 }
 
-async fn anounce_provider(network_client: &Arc<Mutex<NetworkClient>>, function_name: &String) {
-    network_client.lock().await.start_providing(function_name.clone()).await;
+async fn anounce_provider(network_client: &Arc<NetworkClient>, function_name: &String) {
+    network_client.start_providing(function_name.clone()).await;
 }
 
-async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &String, method: &String, body: &Option<Vec<u8>>, requests_in_progress: &Arc<Mutex<RequestsInProgress>>, openfaas_client: &Arc<Mutex<OpenFaasClient>>, network_client: &Arc<Mutex<NetworkClient>>) -> Result<OpenFaaSResponse, actix_web::Error> {
+async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &String, method: &String, body: &Option<Vec<u8>>, requests_in_progress: &Arc<Mutex<RequestsInProgress>>, openfaas_client: &Arc<OpenFaasClient>, network_client: &Arc<NetworkClient>) -> Result<OpenFaaSResponse, actix_web::Error> {
     let function_response_status;
     let function_response_body;
     
     if providers.contains(peer_id) {
-        let resp = openfaas_client.lock().await.request_function(&name, &method, body.clone()).await;
+        let resp = openfaas_client.request_function(&name, &method, body.clone()).await;
         match resp {
             Ok(resp) => {
                 function_response_status = resp.status().as_u16();
@@ -330,7 +330,7 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
                     let mut rp_instance = requests_in_progress_clone.lock().await;
                     rp_instance.push_req(&p, false);
                 }
-                let response = network_client.lock().await.request_function(p, name, method, body).await;
+                let response = network_client.request_function(p, name, method, body).await;
                 {
                     let mut rp_instance = requests_in_progress_clone.lock().await;
                     rp_instance.pop_req(&p, false);
@@ -349,8 +349,8 @@ async fn function_request(providers: HashSet<PeerId>, peer_id: &PeerId, name: &S
                 function_response_status = function_response.0.0;
             },
             Err(e) => {
-                eprintln!("None of the providers returned file: {:?}", e);
-                return Err(actix_web::error::ErrorInternalServerError("None of the providers returned file"));
+                eprintln!("None of the providers responded: {:?}", e);
+                return Err(actix_web::error::ErrorInternalServerError("None of the providers responded"));
             }
         };
     }

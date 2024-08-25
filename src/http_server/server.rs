@@ -7,15 +7,15 @@ use crate::{network::NetworkClient, openfaas::OpenFaasClient, data_structures::R
 use crate::http_server::routes::routes;
 
 pub(crate) struct AppState {
-    pub(crate) nc: Arc<Mutex<NetworkClient>>,
-    pub(crate) ofc: Arc<Mutex<OpenFaasClient>>,
+    pub(crate) nc: Arc<NetworkClient>,
+    pub(crate) ofc: Arc<OpenFaasClient>,
     pub(crate) peer_id: libp2p::PeerId,
     pub(crate) rp: Arc<Mutex<RequestsInProgress>>,
 }
 impl AppState {
     pub(crate) fn new(
-        nc: Arc<Mutex<NetworkClient>>,
-        ofc: Arc<Mutex<OpenFaasClient>>,
+        nc: Arc<NetworkClient>,
+        ofc: Arc<OpenFaasClient>,
         peer_id: libp2p::PeerId,
         rp: Arc<Mutex<RequestsInProgress>>,
     ) -> Self {
