@@ -38,15 +38,24 @@ impl OpenFaasClient {
                 resp = self.http_client.get(format!("{}/function/{}", self.host, function_name)).send().await;
             },
             "POST" => {
+                if body == None {
+                    return Err(Box::new(io::Error::new(io::ErrorKind::InvalidInput, "Body is required for POST method")));
+                }
                 resp = self.http_client.post(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
             },
             "PUT" => {
+                if body == None {
+                    return Err(Box::new(io::Error::new(io::ErrorKind::InvalidInput, "Body is required for PUT method")));
+                }
                 resp = self.http_client.put(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
             },
             "DELETE" => {
                 resp = self.http_client.delete(format!("{}/function/{}", self.host, function_name)).send().await;
             },
             "PATCH" => {
+                if body == None {
+                    return Err(Box::new(io::Error::new(io::ErrorKind::InvalidInput, "Body is required for PATCH method")));
+                }
                 resp = self.http_client.patch(format!("{}/function/{}", self.host, function_name)).body(body.unwrap()).send().await;
             },
             _ => {

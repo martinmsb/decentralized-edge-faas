@@ -22,11 +22,12 @@ use crate::openfaas::OpenFaasClient;
 #[derive(Deserialize)]
 pub struct AnycallBody {
     http_method: String,
-    body: Option<Value>
+    body: Option<Value>,
+    path_and_query: Option<String>
 }
 
 #[derive(Deserialize)]
-pub struct MulticallBody {
+pub struct ManycallBody {
     // Array of objects
     items: Value
 }
@@ -37,7 +38,7 @@ pub struct OpenFaaSResponse {
 }
 
 pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>, req_body: web::Json<AnycallBody>) -> impl Responder {
-    let name = path.into_inner();
+    let mut name = path.into_inner();
     if name.is_empty() {
         return Err(actix_web::error::ErrorBadRequest("Function name is empty"));
     }
@@ -60,12 +61,18 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
         None => None
     };
 
+    let path_and_query_field = &req_body.path_and_query;
+
     let function_response_result;
     // Locate all nodes providing the function.
     let providers = network_client.get_providers(name.clone()).await;
     println!("providers: {:?}", providers);
     if providers.is_empty() {
         return Err(actix_web::error::ErrorInternalServerError("Could not find provider"));
+    }
+    
+    if path_and_query_field.is_some() {
+        name = name + path_and_query_field.as_ref().unwrap();
     }
 
     // Request the content of the file from each node.
@@ -90,7 +97,7 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
 
 }
 
-pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Path<String>, req_body: web::Json<MulticallBody>) -> impl Responder {
+pub async fn execute_function_manycall(data: web::Data<AppState>, path: web::Path<String>, req_body: web::Json<ManycallBody>) -> impl Responder {
     let name = path.into_inner();
     if name.is_empty() {
         return Err(actix_web::error::ErrorBadRequest("Function name is empty"));
@@ -225,17 +232,21 @@ pub async fn execute_function_multicall(data: web::Data<AppState>, path: web::Pa
         handle.await.unwrap();
     }
 
-    // Decrease in progress requests from providers in this multicall
+    // Decrease in progress requests from providers in this manycall
     {
         let mut rp_instance = requests_in_progress.lock().await;
-        rp_instance.remove_multicall(&providers);
+        rp_instance.remove_manycall(&providers);
     }
 
     let results = items_result.lock().await;
 
     let response = results.to_owned();
 
-    Ok(HttpResponse::Ok().json(response))
+    let body = json!({
+        "results": response
+    });
+
+    Ok(HttpResponse::Ok().json(body))
 }
 
 pub async fn deploy_function(data: web::Data<AppState>, payload: Multipart) -> impl Responder {
@@ -274,10 +285,10 @@ pub async fn deploy_known_function(data: web::Data<AppState>, payload: Multipart
     match openfaas_deploy_result {
         Ok(_) => (),
         Err(e) => {
-            return Err(e)
+            eprintln!("Failed to deploy function: {:?}", e);
+            return Err(actix_web::error::ErrorInternalServerError("Failed to deploy function"));
         }
-    }
-    
+    }    
 
     // Start providing the function name to the network.    
     anounce_provider(network_client, &function_name).await;
