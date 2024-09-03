@@ -1,25 +1,17 @@
 use actix_web::{web, App, HttpServer, middleware};
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use libp2p;
 
-use crate::{network::NetworkClient, openfaas::OpenFaasClient, data_structures::RequestsInProgress};
+use crate::functions_service::FunctionsService;
 use crate::http_server::routes::routes;
 
 pub(crate) struct AppState {
-    pub(crate) nc: Arc<NetworkClient>,
-    pub(crate) ofc: Arc<OpenFaasClient>,
-    pub(crate) peer_id: libp2p::PeerId,
-    pub(crate) rp: Arc<Mutex<RequestsInProgress>>,
+    pub(crate) fs: Arc<FunctionsService>,
 }
 impl AppState {
     pub(crate) fn new(
-        nc: Arc<NetworkClient>,
-        ofc: Arc<OpenFaasClient>,
-        peer_id: libp2p::PeerId,
-        rp: Arc<Mutex<RequestsInProgress>>,
+        fs: Arc<FunctionsService>,
     ) -> Self {
-        Self { nc, ofc, peer_id, rp }
+        Self { fs }
     }
 }
 

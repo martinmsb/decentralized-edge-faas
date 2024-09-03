@@ -10,6 +10,7 @@
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
 
+use futures::channel::oneshot::channel;
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
@@ -22,6 +23,7 @@ use libp2p::{
     request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel},
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
     tcp, yamux, PeerId,
+    identify::{Config as IdentifyConfig, Behaviour as IdentifyBehavior, Event as IdentifyEvent}
 };
 
 use libp2p::StreamProtocol;
@@ -76,6 +78,12 @@ pub(crate) async fn new(
                 )],
                 request_response::Config::default(),
             ),
+            identify: IdentifyBehavior::new(
+                IdentifyConfig::new(
+                "/agent/connection/1.0.0".to_string(), 
+                key.clone().public()
+                )
+            )
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
@@ -169,7 +177,7 @@ impl NetworkClient {
             .await
             .expect("Command receiver not to be dropped.");
         }
-        //receiver.await.expect("Sender not to be dropped.");
+        
         // Add 5 sec timeout to avoid infinite waiting
         match timeout(Duration::from_secs(5), receiver).await {
             Ok(Ok(providers)) => providers,
@@ -309,6 +317,25 @@ impl EventLoop {
                 },
             )) => {
                 if let Some(sender) = pending_get_providers.remove(&id) {
+                    
+                    for provider in &providers {
+                        // TODO check if we are already connected to the provider
+                        if !self.swarm.is_connected(provider) {
+                            match self.swarm.dial(provider.clone()) {
+                                Ok(()) => {
+                                    let (dial_sender, dial_receiver) = oneshot::channel();
+                                    pending_dial.insert(provider.clone(), dial_sender);
+                                    println!("Dialing provider {:?}", provider);
+                                    // Add 3 sec timeout to avoid infinite waiting, get providers timeout has to be higher than this timeout
+                                    timeout(Duration::from_secs(3), dial_receiver).await;
+                                }
+                                Err(e) => {
+                                    println!("Error dialing provider {:?}: {:?}", provider, e);
+                                }
+                            }                
+                        }
+                    }
+
                     sender.send(providers).expect("Receiver not to be dropped");
 
                     // Finish the query. We are only interested in the first result.
@@ -370,6 +397,18 @@ impl EventLoop {
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
                 request_response::Event::ResponseSent { .. },
             )) => {}
+            SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Received {
+                peer_id,
+                info,
+            })) => {
+                eprintln!("Received identify info from peer {:?}: {:?}", peer_id, info);
+                info.clone().listen_addrs.iter().for_each(|addr| {
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
+                });
+            }
             SwarmEvent::NewListenAddr { address, .. } => {
                 let local_peer_id = *self.swarm.local_peer_id();
                 eprintln!(
@@ -496,6 +535,7 @@ impl EventLoop {
 struct Behaviour {
     request_response: request_response::cbor::Behaviour<FunctionRequest, FunctionResponse>,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
+    identify: IdentifyBehavior,
 }
 
 #[derive(Debug)]

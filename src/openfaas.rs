@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 use regex::Regex;
+use uuid::Uuid;
 
 pub(crate) struct OpenFaasClient {
     http_client: Client,
@@ -69,9 +70,21 @@ impl OpenFaasClient {
     }
     pub(crate) async fn deploy_function(
         &self,
-        function_name: &str,
-        mut files: Multipart
-    ) -> Result<(), Box<dyn Error>>{
+        mut files: Multipart,
+        optional_function_name: Option<&str>,
+    ) -> Result<String, Box<dyn Error>>{
+        let my_uuid = Uuid::new_v4();
+
+        let generated_function_name;
+        let function_name = match optional_function_name {
+            Some(name) => name,
+            None => {
+                // add fn- to uuid to create funciton name
+                generated_function_name = format!("fn-{}", my_uuid.to_string());
+                &generated_function_name
+            }
+        };
+        
         let template_path = Path::new("openfaas_config_template.yml");
         let output_path = Path::new("openfaas_config.yml");
         
@@ -158,7 +171,7 @@ impl OpenFaasClient {
         
         // Remove files handler.py and requirements.txt from openfaas_handler folder
         self.remove_files().unwrap();
-        Ok(())
+        Ok(function_name.to_owned())
     }
 
     fn create_config_file(

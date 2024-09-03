@@ -1,9 +1,13 @@
 mod network;
 mod openfaas;
+mod model;
 use openfaas::OpenFaasClient;
 mod http_server;
 mod data_structures;
 use data_structures::RequestsInProgress;
+mod functions_service;
+use functions_service::FunctionsService;
+
 use tokio::task::spawn;
 use tokio::sync::Mutex;
 
@@ -96,11 +100,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     
     let requests_in_progress = Arc::new(Mutex::new(RequestsInProgress::new()));
-    let app_state = http_server::server::AppState::new(
+    let functions_service = FunctionsService::new(
         Arc::clone(&network_client),
         Arc::clone(&openfaas_client),
-        peer_id.clone(),
         Arc::clone(&requests_in_progress),
+        peer_id.clone(),
+    );
+    let app_state = http_server::server::AppState::new(
+        Arc::new(functions_service),
         );
     
     http_server::server::run_http_server(app_state, opt.http_listen_port).await.expect("HTTP server failed.");

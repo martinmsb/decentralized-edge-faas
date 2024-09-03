@@ -114,12 +114,25 @@ impl RequestsInProgress {
         None
     }
 
+    pub fn find_not_in_progress_peer(&mut self, providers: &HashSet<PeerId>) -> Option<PeerId> {
+        for provider in providers {
+            if self.map.contains_key(provider) == false {
+                println!("Peer with no requests ongoing found: {:?}", provider);
+                println!("Actual state");
+                println!("{:?}", self);
+                println!("First peer from providers found: {:?}", provider);
+                return Some(provider.clone());
+            }
+        }
+        None
+    }
+
     pub fn remove_manycall(&mut self, providers: &HashSet<PeerId>) {
         for provider in providers {
             if let Some(data) = self.map.get(provider) {
                 let pos = data.vector_position;
                 let mp = data.manycall_in_progress;
-                if mp == 1 {
+                if mp == 1 && pos == 0 {
                     self.queues_vector[pos].retain(|x| x != provider);
                     self.map.remove(provider);
                     println!("Removed provider {:?} from position {:?}", provider, pos);
