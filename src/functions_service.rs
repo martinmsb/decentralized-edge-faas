@@ -2,11 +2,8 @@ use crate::network::NetworkClient;
 use crate::openfaas::OpenFaasClient;
 use crate::data_structures::RequestsInProgress;
 use crate::model::OpenFaaSResponse;
-use crate::model::BodyData;
 use crate::model::detect_and_parse_body;
 use crate::model::serialize_body;
-
-use uuid::Uuid;
 
 use tokio::spawn;
 use tokio::sync::Mutex;
@@ -21,7 +18,8 @@ use libp2p::PeerId;
 use actix_multipart::Multipart;
 use serde_json::Value;
 use serde_json::json;
-use serde::Serialize;
+
+use log::{info, error};
 
 pub(crate) struct FunctionsService {
     pub(crate) nc: Arc<NetworkClient>,
@@ -49,7 +47,7 @@ impl FunctionsService {
         let function_response_result;
         // Locate all nodes providing the function.
         let providers = network_client.get_providers(name.clone()).await;
-        println!("providers: {:?}", providers);
+        info!("providers: {:?}", providers);
         if providers.is_empty() {
             return Err(Box::new(io::Error::new(io::ErrorKind::NotFound, "No providers found for function")));
         }
@@ -59,7 +57,7 @@ impl FunctionsService {
         }
 
         // Request the content of the file from each node.
-        println!("providers: {:?}", providers);
+        info!("providers: {:?}", providers);
         // Check if providers length is 1 and then check if it is the same as the peer_id
         // If it is, then return the file content
         match self.function_request(providers, peer_id, &name, &method, &body, requests_in_progress, openfaas_client, network_client).await
@@ -78,7 +76,7 @@ impl FunctionsService {
         let peer_id = &self.peer_id;
 
         let providers = network_client.get_providers(name.clone()).await;
-        println!("providers: {:?}", providers);
+        info!("providers: {:?}", providers);
 
         if providers.is_empty() {
             return Err(Box::new(io::Error::new(io::ErrorKind::NotFound,"Could not find provider")));
@@ -157,7 +155,7 @@ impl FunctionsService {
                             function_response_result = resp_body;
                         }
                         Err(err) => {
-                            eprintln!("Failed to get response from function {}: {:?}", name_clone, err);
+                            error!("Failed to get response from function {}: {:?}", name_clone, err);
                             function_response_status = 500;
                             function_response_result = "Failed to get response from function".to_string().into_bytes();
                         }
@@ -175,7 +173,7 @@ impl FunctionsService {
                             function_response_result = function_response.1
                         },
                         Err(e) => {
-                            eprintln!("Response from provider failed: {:?}", e);
+                            error!("Response from provider failed: {:?}", e);
                             function_response_status = 500;
                             function_response_result = "Response from provider failed".to_string().into_bytes()
                         }
@@ -230,7 +228,7 @@ impl FunctionsService {
         match deployment_result {
             Ok(f_n) => function_name = f_n,
             Err(e) => {
-                eprintln!("Failed to deploy function: {:?}", e);
+                error!("Failed to deploy function: {:?}", e);
                 return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to deploy function")));
             }
         }
@@ -245,16 +243,15 @@ impl FunctionsService {
         let network_client = &self.nc;
 
         // Deploy the function to openfaas
-        /*
         let deployment_result = self.deploy_openfaas(payload, Some(function_name)).await;
         
         match deployment_result {
             Ok(_) => (),
             Err(e) => {
-                eprintln!("Failed to deploy function: {:?}", e);
+                error!("Failed to deploy function: {:?}", e);
                 return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to deploy function")));
             }
-        }*/    
+        }
 
         // Start providing the function name to the network.    
         network_client.start_providing(function_name.clone()).await;
@@ -284,7 +281,7 @@ impl FunctionsService {
                     function_response_body = resp_body;
                 }
                 Err(err) => {
-                    eprintln!("Failed to get response from function {}: {:?}", name, err);
+                    error!("Failed to get response from function {}: {:?}", name, err);
                     return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to get response from function")));
                 }
             }
@@ -320,12 +317,12 @@ impl FunctionsService {
                     function_response_status = function_response.0.0;
                 },
                 Err(e) => {
-                    eprintln!("None of the providers responded: {:?}", e);
+                    error!("None of the providers responded: {:?}", e);
                     return Err(Box::new(io::Error::new(io::ErrorKind::NotFound,"None of the providers responded")));
                 }
             };
         }
-        println!("Response received in service, body: {:?}", function_response_body);
+        info!("Response received in service, body: {:?}", function_response_body);
                 
         let openfaas_response = OpenFaaSResponse {
             status: function_response_status,
@@ -341,7 +338,7 @@ impl FunctionsService {
         match deployment_result {
             Ok(fun_name) => function_name = fun_name,
             Err(e) => {
-                eprintln!("Failed to deploy function: {:?}", e);
+                error!("Failed to deploy function: {:?}", e);
                 return Err(actix_web::error::ErrorInternalServerError("Failed to deploy function"));
             }
         }

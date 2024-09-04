@@ -11,6 +11,8 @@ use std::process::Command;
 use regex::Regex;
 use uuid::Uuid;
 
+use log::{info, error};
+
 pub(crate) struct OpenFaasClient {
     http_client: Client,
     host: String,
@@ -97,7 +99,7 @@ impl OpenFaasClient {
         match self.create_config_file(template_path, output_path, &values) {
             Ok(_) => (),
             Err(e) => {
-                eprintln!("Failed to create config file: {:?}", e);
+                error!("Failed to create config file: {:?}", e);
                 return Err(Box::new(e));
             }
         }
@@ -114,21 +116,21 @@ impl OpenFaasClient {
             let field_name = field.name().to_owned();
 
             if field_name != "handler" && field_name != "requirements" {
-                eprintln!("Invalid field name: {}", field_name);
+                error!("Invalid field name: {}", field_name);
                 let _ = self.remove_files();
                 return Err(Box::new(io::Error::new(io::ErrorKind::InvalidInput, "Invalid field name")));
             
             }
             
             if field_name == "handler" && handler || field_name == "requirements" && requirements {
-                eprintln!("Handler file already uploaded");
+                error!("Handler file already uploaded");
                 return Err(Box::new(io::Error::new(io::ErrorKind::AlreadyExists, "Handler file already uploaded")));
             }
             let field_extension = if field_name == "handler" { "py" } else { "txt" };
             let mut file = match File::create(format!("openfaas_handler/{}.{}", field_name, field_extension)) {
                 Ok(file) => file,
                 Err(e) => {
-                    eprintln!("Failed to create file: {:?}", e);
+                    error!("Failed to create file: {:?}", e);
                     return Err(Box::new(e));
                 }
             };
@@ -142,7 +144,7 @@ impl OpenFaasClient {
                 match file.write_all(&chunk) {
                     Ok(_) => if field_name == "handler" {handler = true} else {requirements = true},
                     Err(e) => {
-                        eprintln!("Failed to write to output file: {:?}", e);
+                        error!("Failed to write to output file: {:?}", e);
                         return Err(Box::new(e));
                     }
                 }
@@ -156,15 +158,15 @@ impl OpenFaasClient {
         match output_result {
             Ok(output) => {
                 if output.status.success() {
-                    println!("Function deployed successfully");
+                    info!("Function deployed successfully");
                 } else {
-                    eprintln!("Failed to deploy function: {:?}", output);
+                    error!("Failed to deploy function: {:?}", output);
                     self.remove_files().unwrap();
                     return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to deploy function. Check handler and requirements files")));
                 }
             },
             Err(e) => {
-                eprintln!("Failed to execute command: {:?}", e);
+                error!("Failed to execute command: {:?}", e);
                 return Err(Box::new(e));
             }
         };
@@ -183,7 +185,7 @@ impl OpenFaasClient {
         let template_content = match fs::read_to_string(template_path) {
             Ok(template_content) => template_content,
             Err(e) => {
-                eprintln!("Failed to read template file: {:?}", e);
+                error!("Failed to read template file: {:?}", e);
                 return Err(e);
             }
         };
@@ -200,14 +202,14 @@ impl OpenFaasClient {
         let mut file = match File::create(output_path) {
             Ok(file) => file,
             Err(e) => {
-                eprintln!("Failed to create output file: {:?}", e);
+                error!("Failed to create output file: {:?}", e);
                 return Err(e);
             }
         };
         match file.write_all(result_content.as_bytes()) {
             Ok(_) => (),
             Err(e) => {
-                eprintln!("Failed to write to output file: {:?}", e);
+                error!("Failed to write to output file: {:?}", e);
                 return Err(e);
             }
         }

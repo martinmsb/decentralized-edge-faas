@@ -20,6 +20,8 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use clap::Parser;
 
+use log::{info, error};
+
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let _ = tracing_subscriber::fmt()
@@ -30,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     let (network_client, mut network_events, network_event_loop, peer_id) =
         network::new(opt.secret_key_seed).await?;
-    println!("Peer ID: {:?}", peer_id.to_base58());
+    info!("Peer ID: {:?}", peer_id.to_base58());
 
     // Spawn the network task for it to run in the background.
     spawn(network_event_loop.run());
@@ -73,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         async move {
                         // Http request to localhost:8000/functions/name
                         let resp = openfaas_client.request_function(&request, &method, body).await;
-                        println!("Response received in main loop");
+                        info!("Response received in main loop");
                         let resp_status;
                         let resp_body;
                         match resp {
@@ -82,13 +84,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 resp_body = resp.bytes().await.unwrap().to_vec();
                             }
                             Err(err) => {
-                                eprintln!("Failed to send request: {:?}", err);
+                                error!("Failed to send request: {:?}", err);
                                 resp_status = 500;
                                 resp_body = "Failed to send request".as_bytes().to_vec(); 
                             }
                         }
                         if let Err(err) = network_client.respond_function(resp_status, resp_body, channel).await {
-                            eprintln!("Failed to respond with request result: {:?}", err);
+                            error!("Failed to respond with request result: {:?}", err);
                         }
                     }
                     });

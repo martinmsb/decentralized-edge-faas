@@ -6,14 +6,10 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
-use uuid::Uuid;
 
-use crate::data_structures::RequestsInProgress;
-use crate::functions_service;
+use log::{info, error};
+
 use crate::http_server::server::AppState;
-use crate::network::NetworkClient;
-use crate::openfaas::OpenFaasClient;
-use crate::model::OpenFaaSResponse;
 use crate::model::serialize_body;
 use crate::model::detect_and_parse_body;
 
@@ -31,7 +27,7 @@ pub struct ManycallBody {
 }
 
 pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>, req_body: web::Json<AnycallBody>) -> impl Responder {
-    let mut name = path.into_inner();
+    let name = path.into_inner();
     if name.is_empty() {
         return Err(actix_web::error::ErrorBadRequest("Function name is empty"));
     }
@@ -58,7 +54,7 @@ pub async fn execute_function(data: web::Data<AppState>, path: web::Path<String>
     match function_response_result {
         Ok(function_response_result) => {
             let s = serialize_body(detect_and_parse_body(function_response_result.body)).to_string();
-            println!("Response received in handler, body: {:?}", s);
+            info!("Response received in handler, body: {:?}", s);
             return Ok(HttpResponse::build(StatusCode::from_u16(function_response_result.status).unwrap()).body(s));
         },
         Err(e) => return Err(actix_web::error::ErrorInternalServerError(e))
@@ -86,7 +82,7 @@ pub async fn execute_function_manycall(data: web::Data<AppState>, path: web::Pat
     let response = match response {
         Ok(response) => response,
         Err(e) => {
-            eprintln!("Failed to execute manycall: {:?}", e);
+            error!("Failed to execute manycall: {:?}", e);
             return Err(actix_web::error::ErrorInternalServerError("Failed to execute manycall"));
         }
     };
@@ -105,7 +101,7 @@ pub async fn deploy_function(data: web::Data<AppState>, payload: Multipart) -> i
     match function_name {
         Ok(function_name) => return Ok(HttpResponse::Ok().body(function_name)),
         Err(e) => {
-            eprintln!("Failed to deploy function: {:?}", e);
+            error!("Failed to deploy function: {:?}", e);
             return Err(actix_web::error::ErrorInternalServerError("Failed to deploy function"));
         }
     }
@@ -124,7 +120,7 @@ pub async fn deploy_known_function(data: web::Data<AppState>, payload: Multipart
     match deployment_result {
         Ok(_) => return Ok(HttpResponse::Ok().body(function_name.clone())),
         Err(e) => {
-            eprintln!("Failed to deploy function: {:?}", e);
+            error!("Failed to deploy function: {:?}", e);
             return Err(actix_web::error::ErrorInternalServerError("Failed to deploy function"));
         }
     }

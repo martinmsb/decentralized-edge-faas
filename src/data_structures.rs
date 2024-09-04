@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use libp2p::PeerId;
 
+use log::info;
+
 #[derive(Debug)]
 struct PeerData {
     vector_position: usize,
@@ -44,18 +46,18 @@ impl RequestsInProgress {
                 self.queues_vector[new_pos].push(item.clone());
             }
             self.map.insert(item.clone(), PeerData{vector_position: new_pos, manycall_in_progress: new_mp});
-            println!("Pushed: {:?} from pos: {:?} to pos: {:?}", item, pos, new_pos);
-            println!("Actual state");
-            println!("{:?}", self);
+            info!("Pushed: {:?} from pos: {:?} to pos: {:?}", item, pos, new_pos);
+            info!("Actual state");
+            info!("{:?}", self);
             true
         } else {
             // If peer does not exists in hashmap, push it to the first queue
             let new_mp = if manycall_first_use { 1 } else { 0 };
             self.queues_vector[1].push(item.clone());
             self.map.insert(item.clone(), PeerData{vector_position: 1, manycall_in_progress: new_mp});
-            println!("Pushed new peer: {:?} to pos: {:?}", item, 1);
-            println!("Actual state");
-            println!("{:?}", self);
+            info!("Pushed new peer: {:?} to pos: {:?}", item, 1);
+            info!("Actual state");
+            info!("{:?}", self);
             true
         }
 
@@ -80,17 +82,17 @@ impl RequestsInProgress {
             if new_pos > 0 || ( new_pos == 0 && is_manycall ) || ( new_pos == 0 && !is_manycall && mp > 0 ) {
                 self.queues_vector[new_pos].push(item.clone());
                 self.map.insert(item.clone(), PeerData{vector_position: new_pos, manycall_in_progress: mp});
-                println!("Popped: {:?} from pos: {:?} to pos: {:?}", item, pos, new_pos);
+                info!("Popped: {:?} from pos: {:?} to pos: {:?}", item, pos, new_pos);
             }
             else {
                 self.map.remove(item);
-                println!("Removed: {:?} from pos: {:?}", item, pos);
+                info!("Removed: {:?} from pos: {:?}", item, pos);
             }
             while self.queues_vector.len() > 2 && self.queues_vector.last().map_or(false, |deque| deque.is_empty()) {
                 self.queues_vector.pop();
             }
-            println!("Actual state");
-            println!("{:?}", self);
+            info!("Actual state");
+            info!("{:?}", self);
             true
         } else {
             false
@@ -101,10 +103,10 @@ impl RequestsInProgress {
         for (index, queue) in self.queues_vector.iter().enumerate() {
             for item in queue {
                 if providers.contains(item) {
-                    println!("Requested peer...");
-                    println!("Actual state");
-                    println!("{:?}", self);
-                    println!("First peer from providers found: {:?}", item);
+                    info!("Requested peer...");
+                    info!("Actual state");
+                    info!("{:?}", self);
+                    info!("First peer from providers found: {:?}", item);
                     let provider = item.clone();
                     self.queues_vector[index].retain(|x| x != &provider);
                     return Some(provider);
@@ -117,10 +119,10 @@ impl RequestsInProgress {
     pub fn find_not_in_progress_peer(&mut self, providers: &HashSet<PeerId>) -> Option<PeerId> {
         for provider in providers {
             if self.map.contains_key(provider) == false {
-                println!("Peer with no requests ongoing found: {:?}", provider);
-                println!("Actual state");
-                println!("{:?}", self);
-                println!("First peer from providers found: {:?}", provider);
+                info!("Peer with no requests ongoing found: {:?}", provider);
+                info!("Actual state");
+                info!("{:?}", self);
+                info!("First peer from providers found: {:?}", provider);
                 return Some(provider.clone());
             }
         }
@@ -135,15 +137,15 @@ impl RequestsInProgress {
                 if mp == 1 && pos == 0 {
                     self.queues_vector[pos].retain(|x| x != provider);
                     self.map.remove(provider);
-                    println!("Removed provider {:?} from position {:?}", provider, pos);
+                    info!("Removed provider {:?} from position {:?}", provider, pos);
                 }
                 else {
                     self.map.insert(provider.clone(), PeerData{vector_position: pos, manycall_in_progress: mp - 1});
-                    println!("Decreased manycall count for provider {:?} from position {:?}", provider, pos);
+                    info!("Decreased manycall count for provider {:?} from position {:?}", provider, pos);
                 }
             }
         }
-        println!("Actual state");
-        println!("{:?}", self);
+        info!("Actual state");
+        info!("{:?}", self);
     }
 }

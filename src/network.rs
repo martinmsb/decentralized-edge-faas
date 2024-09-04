@@ -10,7 +10,6 @@
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
 
-use futures::channel::oneshot::channel;
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
@@ -35,6 +34,9 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio::sync::Mutex;
 use std::sync::Arc;
+
+use log::{info, error, warn};
+
 /// Creates the network components, namely:
 ///
 /// - The network client to interact with the network layer from anywhere
@@ -152,7 +154,7 @@ impl NetworkClient {
     /// Advertise the local node as the provider of the given function on the DHT.
     pub(crate) async fn start_providing(&self, function_name: String) {
         let providers = self.get_providers(function_name.clone()).await;
-        println!("Providers before start providing: {:?}", providers);
+        info!("Providers before start providing: {:?}", providers);
         let (sender, receiver) = oneshot::channel();
         let sender_clone = Arc::clone(&self.sender);
         {
@@ -164,7 +166,7 @@ impl NetworkClient {
         }
         receiver.await.expect("Sender not to be dropped.");
         let providers = self.get_providers(function_name.clone()).await;
-        println!("Providers after start providing: {:?}", providers);
+        info!("Providers after start providing: {:?}", providers);
     }
 
     /// Find the providers for the given function on the DHT.
@@ -196,7 +198,7 @@ impl NetworkClient {
     ) -> Result<FunctionResponse, Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         let sender_clone = Arc::clone(&self.sender);
-        println!("Sending request function command");
+        info!("Sending request function command");
         {
         let mut locked_sender = sender_clone.lock().await;
         locked_sender.send(Command::RequestFunction {
@@ -209,11 +211,11 @@ impl NetworkClient {
             .await
             .expect("Command receiver not to be dropped.");
         }
-        println!("Waiting for response");
+        info!("Waiting for response");
         
         let res = receiver.await.expect("Sender not be dropped.");
-        println!("Response received");
-        println!("Response: {:?}", res);
+        info!("Response received");
+        info!("Response: {:?}", res);
         res
     }
 
@@ -227,19 +229,19 @@ impl NetworkClient {
         let sender_clone = Arc::clone(&self.sender);
         {
         let mut locked_sender = sender_clone.lock().await;
-        println!("Sender locked. Sending response");
-        println!("Response status: {:?}", function_response_status);
-        println!("Response body: {:?}", function_response_body);
+        info!("Sender locked. Sending response");
+        info!("Response status: {:?}", function_response_status);
+        info!("Response body: {:?}", function_response_body);
 
         let r = locked_sender
             .send(Command::RespondFunction { function_response_status, function_response_body, channel })
             .await;
         match r {
-            Ok(_) => println!("Response sent"),
-            Err(e) => println!("Error sending response: {:?}", e),
+            Ok(_) => info!("Response sent"),
+            Err(e) => info!("Error sending response: {:?}", e),
         }
         }
-        println!("Response sent");
+        info!("Response sent");
         Ok(())
     }
 }
@@ -277,7 +279,7 @@ impl EventLoop {
                 event = self.swarm.select_next_some() => self.handle_event(event).await,
                 command = self.command_receiver.next() => match command {
                     Some(c) => {
-                        println!("Received command: {:?}", c);
+                        info!("Received command: {:?}", c);
                         self.handle_command(c).await;
                     },
                     None => return, // Command channel closed, shutting down
@@ -325,12 +327,12 @@ impl EventLoop {
                                 Ok(()) => {
                                     let (dial_sender, dial_receiver) = oneshot::channel();
                                     pending_dial.insert(provider.clone(), dial_sender);
-                                    println!("Dialing provider {:?}", provider);
+                                    info!("Dialing provider {:?}", provider);
                                     // Add 3 sec timeout to avoid infinite waiting, get providers timeout has to be higher than this timeout
-                                    timeout(Duration::from_secs(3), dial_receiver).await;
+                                    let _ = timeout(Duration::from_secs(3), dial_receiver).await;
                                 }
                                 Err(e) => {
-                                    println!("Error dialing provider {:?}: {:?}", provider, e);
+                                    error!("Error dialing provider {:?}: {:?}", provider, e);
                                 }
                             }                
                         }
@@ -363,7 +365,7 @@ impl EventLoop {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    println!("Sending inbound request event: {:?}", request);
+                    info!("Sending inbound request event: {:?}", request);
                     event_sender
                         .send(Event::InboundRequest {
                             request: request.0,
@@ -401,7 +403,7 @@ impl EventLoop {
                 peer_id,
                 info,
             })) => {
-                eprintln!("Received identify info from peer {:?}: {:?}", peer_id, info);
+                info!("Received identify info from peer {:?}: {:?}", peer_id, info);
                 info.clone().listen_addrs.iter().for_each(|addr| {
                     self.swarm
                         .behaviour_mut()
@@ -411,19 +413,19 @@ impl EventLoop {
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 let local_peer_id = *self.swarm.local_peer_id();
-                eprintln!(
+                info!(
                     "Local node is listening on {:?}",
                     address.with(Protocol::P2p(local_peer_id))
                 );
             }
             SwarmEvent::NewExternalAddrOfPeer { peer_id, address, .. } => {
-                eprintln!("Discovered external address {:?} for peer {:?}", address, peer_id);
+                info!("Discovered external address {:?} for peer {:?}", address, peer_id);
             }
             SwarmEvent::IncomingConnection { .. } => {}
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
-                println!("Connected to peer: {:?}", peer_id.to_base58());
+                info!("Connected to peer: {:?}", peer_id.to_base58());
                 if endpoint.is_dialer() {
                     if let Some(sender) = pending_dial.remove(&peer_id) {
                         let _ = sender.send(Ok(()));
@@ -449,8 +451,8 @@ impl EventLoop {
             SwarmEvent::Dialing {
                 peer_id: Some(peer_id),
                 ..
-            } => eprintln!("Dialing {peer_id}"),
-            e => eprintln!("Not handled event: {e:?}"),
+            } => info!("Dialing {peer_id}"),
+            e => warn!("Not handled event: {e:?}"),
         }
     }
 
@@ -517,10 +519,10 @@ impl EventLoop {
                     .request_response
                     .send_request(&peer, FunctionRequest(function_name, method, body));
                 pending_request_function.insert(request_id, sender);
-                println!("Request {:?} stored", request_id);
+                info!("Request {:?} stored", request_id);
             }
             Command::RespondFunction { function_response_status, function_response_body, channel } => {
-                println!("Command RespondFunction");
+                info!("Command RespondFunction");
                 self.swarm
                     .behaviour_mut()
                     .request_response
