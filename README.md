@@ -2,7 +2,10 @@
 
 This repository contains the code for the Final Master Project: Decentralzied Edge FaaS.
 
-OpenFaaS must be installed as explained in [OpenFaaS installation](#openfaas-installation).
+Requirements for code execution:
+- OpenFaaS must be installed as explained in [OpenFaaS installation](#openfaas-installation).
+- A Docker Hub account must be logged in to execute the Rust program.
+- OpenFaaS Gateway must be port-forwarded to the system (step 6 of the OpenFaaS installation).
 
 ## Code execution
 
@@ -84,7 +87,7 @@ Install faas-cli:
 $ curl -SLsf https://cli.openfaas.com | sudo sh
 ```
 
-6. Forward FaaS gateway to the system:
+6. Forward FaaS Gateway to the system:
 ```console
 $ kubectl rollout status -n openfaas deploy/gateway
 $ kubectl port-forward -n openfaas svc/gateway 8080:8080 &
